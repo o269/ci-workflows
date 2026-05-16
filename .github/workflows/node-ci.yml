@@ -1,0 +1,128 @@
+name: Node CI (reusable)
+
+# Shared CI workflow consumed by every Node/Next/Hono repo across the Oasis
+# Studios + Omnia ecosystem. Closes audit CRITICAL-7 (no CI anywhere).
+#
+# Each caller repo's .github/workflows/ci.yml is ~10 lines:
+#
+#   name: CI
+#   on:
+#     push: { branches: [main] }
+#     pull_request:
+#   jobs:
+#     node:
+#       uses: o269/ci-workflows/.github/workflows/node-ci.yml@main
+#       with:
+#         workdir: '.'
+#         build-script: 'build'
+#       secrets: inherit
+
+on:
+  workflow_call:
+    inputs:
+      workdir:
+        description: 'Working directory for the package (e.g. "apps/api" for monorepo subpaths).'
+        type: string
+        default: '.'
+      node-version:
+        description: 'Node version. Default 22.x.'
+        type: string
+        default: '22.x'
+      pnpm-version:
+        description: 'pnpm major version. Default 10.'
+        type: string
+        default: '10'
+      install-script:
+        description: 'Install command. Default `pnpm install --frozen-lockfile`.'
+        type: string
+        default: 'pnpm install --frozen-lockfile'
+      typecheck-script:
+        description: 'Typecheck script name in package.json. Default `typecheck` (falls back to `tsc --noEmit`).'
+        type: string
+        default: 'typecheck'
+      lint-script:
+        description: 'Lint script name. Skip if empty.'
+        type: string
+        default: 'lint'
+      build-script:
+        description: 'Build script name. Skip if empty.'
+        type: string
+        default: 'build'
+      test-script:
+        description: 'Test script name. Skip if empty (test coverage is Phase 2).'
+        type: string
+        default: ''
+      secret-scan:
+        description: 'Run gitleaks secret scan. Default true.'
+        type: boolean
+        default: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: ${{ inputs.workdir }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # needed for gitleaks against PR diff
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ inputs.pnpm-version }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: 'pnpm'
+          cache-dependency-path: ${{ inputs.workdir }}/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: ${{ inputs.install-script }}
+
+      - name: Lint
+        if: inputs.lint-script != ''
+        run: pnpm run ${{ inputs.lint-script }} --if-present
+        continue-on-error: false
+
+      - name: Typecheck
+        run: |
+          if pnpm run | grep -q "  ${{ inputs.typecheck-script }}$"; then
+            pnpm run ${{ inputs.typecheck-script }}
+          else
+            pnpm exec tsc --noEmit
+          fi
+
+      - name: Build
+        if: inputs.build-script != ''
+        run: pnpm run ${{ inputs.build-script }}
+        env:
+          # Skip prebuild architecture-map sync on CI (source file isn't there)
+          ARCH_MAP_SRC: '/nonexistent/skip-on-ci'
+          # Provide minimal env so Next.js prerender doesn't crash on missing public vars.
+          NEXT_TELEMETRY_DISABLED: '1'
+
+      - name: Test
+        if: inputs.test-script != ''
+        run: pnpm run ${{ inputs.test-script }}
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    if: inputs.secret-scan
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Don't fail on findings — surface as annotations. Hard-fail can be enabled later
+        # once existing repos are scrubbed (Phase 2 cleanup).
+        continue-on-error: true
