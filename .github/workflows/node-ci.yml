@@ -134,6 +134,29 @@ jobs:
         env:
           ARCH_MAP_SRC: '/nonexistent/skip-on-ci'
           NEXT_TELEMETRY_DISABLED: '1'
+          # Dummy build-time env so Next.js can prerender API routes that construct
+          # a Supabase client at module top-level. These never reach runtime — Vercel
+          # injects real values for production. Without them, `createClient(url, key)`
+          # throws "supabaseUrl is required" during build's data-collection step.
+          NEXT_PUBLIC_SUPABASE_URL: 'https://placeholder.supabase.co'
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: 'placeholder-anon-key'
+          SUPABASE_URL: 'https://placeholder.supabase.co'
+          SUPABASE_ANON_KEY: 'placeholder-anon-key'
+          SUPABASE_SERVICE_ROLE_KEY: 'placeholder-service-key'
+          LEADS_SUPABASE_URL: 'https://placeholder.supabase.co'
+          LEADS_SUPABASE_SERVICE_KEY: 'placeholder-service-key'
+          NEXT_PUBLIC_KB_SUPABASE_URL: 'https://placeholder.supabase.co'
+          NEXT_PUBLIC_KB_SUPABASE_ANON_KEY: 'placeholder-anon-key'
+          KB_SUPABASE_SERVICE_KEY: 'placeholder-service-key'
+          ANTHROPIC_API_KEY: 'placeholder-anthropic-key'
+          INTUIT_CLIENT_ID: 'placeholder'
+          INTUIT_CLIENT_SECRET: 'placeholder'
+          INTUIT_REDIRECT_URI: 'http://localhost:3000/cb'
+          ADMIN_PASSWORD: 'placeholder'
+          QUICKBASE_USER_TOKEN: 'placeholder'
+          AUTH_PASSWORD_HASH: 'placeholder'
+          MAGNETIC_ADMIN_KEY: 'placeholder'
+          CRON_SECRET: 'placeholder'
 
       - name: Build (npm)
         if: inputs.build-script != '' && inputs.package-manager == 'npm'
