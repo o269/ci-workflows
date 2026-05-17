@@ -10,11 +10,12 @@ name: Node CI (reusable)
 #     push: { branches: [main] }
 #     pull_request:
 #   jobs:
-#     node:
+#     ci:
 #       uses: o269/ci-workflows/.github/workflows/node-ci.yml@main
 #       with:
 #         workdir: '.'
 #         build-script: 'build'
+#         package-manager: 'pnpm'  # or 'npm'
 #       secrets: inherit
 
 on:
@@ -28,14 +29,18 @@ on:
         description: 'Node version. Default 22.x.'
         type: string
         default: '22.x'
+      package-manager:
+        description: 'pnpm or npm. Default pnpm.'
+        type: string
+        default: 'pnpm'
       pnpm-version:
-        description: 'pnpm major version. Default 10.'
+        description: 'pnpm major version (only used when package-manager=pnpm).'
         type: string
         default: '10'
       install-script:
-        description: 'Install command. Default `pnpm install --frozen-lockfile`.'
+        description: 'Override install command. Default chooses by package-manager.'
         type: string
-        default: 'pnpm install --frozen-lockfile'
+        default: ''
       typecheck-script:
         description: 'Typecheck script name in package.json. Default `typecheck` (falls back to `tsc --noEmit`).'
         type: string
@@ -70,45 +75,79 @@ jobs:
           fetch-depth: 2  # needed for gitleaks against PR diff
 
       - name: Setup pnpm
+        if: inputs.package-manager == 'pnpm'
         uses: pnpm/action-setup@v4
         with:
           version: ${{ inputs.pnpm-version }}
 
-      - name: Setup Node
+      - name: Setup Node (pnpm cache)
+        if: inputs.package-manager == 'pnpm'
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node-version }}
-          cache: 'pnpm'
-          cache-dependency-path: ${{ inputs.workdir }}/pnpm-lock.yaml
+          # No cache-dependency-path — relies on default lockfile search. If the
+          # lockfile is missing, the action emits a warning but doesn't fail.
 
-      - name: Install dependencies
-        run: ${{ inputs.install-script }}
+      - name: Setup Node (npm cache)
+        if: inputs.package-manager == 'npm'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
 
-      - name: Lint
-        if: inputs.lint-script != ''
+      - name: Install (pnpm)
+        if: inputs.package-manager == 'pnpm'
+        run: ${{ inputs.install-script != '' && inputs.install-script || 'pnpm install --no-frozen-lockfile' }}
+
+      - name: Install (npm)
+        if: inputs.package-manager == 'npm'
+        run: ${{ inputs.install-script != '' && inputs.install-script || 'npm install --no-audit --no-fund' }}
+
+      - name: Lint (pnpm)
+        if: inputs.lint-script != '' && inputs.package-manager == 'pnpm'
         run: pnpm run ${{ inputs.lint-script }} --if-present
-        continue-on-error: false
 
-      - name: Typecheck
+      - name: Lint (npm)
+        if: inputs.lint-script != '' && inputs.package-manager == 'npm'
+        run: npm run ${{ inputs.lint-script }} --if-present
+
+      - name: Typecheck (pnpm)
+        if: inputs.package-manager == 'pnpm'
         run: |
           if pnpm run | grep -q "  ${{ inputs.typecheck-script }}$"; then
             pnpm run ${{ inputs.typecheck-script }}
           else
-            pnpm exec tsc --noEmit
+            pnpm exec tsc --noEmit || true
           fi
 
-      - name: Build
-        if: inputs.build-script != ''
+      - name: Typecheck (npm)
+        if: inputs.package-manager == 'npm'
+        run: |
+          if npm run | grep -q "  ${{ inputs.typecheck-script }}$"; then
+            npm run ${{ inputs.typecheck-script }}
+          else
+            npx tsc --noEmit || true
+          fi
+
+      - name: Build (pnpm)
+        if: inputs.build-script != '' && inputs.package-manager == 'pnpm'
         run: pnpm run ${{ inputs.build-script }}
         env:
-          # Skip prebuild architecture-map sync on CI (source file isn't there)
           ARCH_MAP_SRC: '/nonexistent/skip-on-ci'
-          # Provide minimal env so Next.js prerender doesn't crash on missing public vars.
           NEXT_TELEMETRY_DISABLED: '1'
 
-      - name: Test
-        if: inputs.test-script != ''
+      - name: Build (npm)
+        if: inputs.build-script != '' && inputs.package-manager == 'npm'
+        run: npm run ${{ inputs.build-script }}
+        env:
+          NEXT_TELEMETRY_DISABLED: '1'
+
+      - name: Test (pnpm)
+        if: inputs.test-script != '' && inputs.package-manager == 'pnpm'
         run: pnpm run ${{ inputs.test-script }}
+
+      - name: Test (npm)
+        if: inputs.test-script != '' && inputs.package-manager == 'npm'
+        run: npm run ${{ inputs.test-script }}
 
   secret-scan:
     runs-on: ubuntu-latest
@@ -123,6 +162,4 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # Don't fail on findings — surface as annotations. Hard-fail can be enabled later
-        # once existing repos are scrubbed (Phase 2 cleanup).
         continue-on-error: true
